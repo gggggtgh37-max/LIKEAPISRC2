@@ -16,19 +16,26 @@ app = Flask(__name__)
 
 def load_tokens(server_name):
     try:
+        # ફાઇલનું નામ નક્કી કરો
         if server_name == "IND":
-            # ફાઇલનું નામ બદલીને jwt_token.json કર્યું છે
-            with open("jwt_token.json", "r") as f:
-                tokens = json.load(f)
+            filename = "token_ind.json"
         elif server_name in {"BR", "US", "SAC", "NA"}:
-            with open("token_br.json", "r") as f:
-                tokens = json.load(f)
+            filename = "token_br.json"
         else:
-            with open("token_bd.json", "r") as f:
-                tokens = json.load(f)
+            filename = "token_bd.json"
+            
+        # ફાઇલ ખોલો
+        with open(filename, "r") as f:
+            tokens = json.load(f)
         return tokens
+    except FileNotFoundError:
+        app.logger.error(f"ભૂલ: {filename} ફાઇલ સર્વર પર મળી નથી!")
+        return None
+    except json.JSONDecodeError:
+        app.logger.error(f"ભૂલ: {filename} ફાઇલમાં રહેલા ડેટાનું ફોર્મેટ ખોટું છે!")
+        return None
     except Exception as e:
-        app.logger.error(f"Error loading tokens for server {server_name}: {e}")
+        app.logger.error(f"Error loading tokens: {e}")
         return None
 
 def encrypt_message(plaintext):
