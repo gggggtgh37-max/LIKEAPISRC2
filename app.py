@@ -11,16 +11,8 @@ import like_pb2
 import like_count_pb2
 import uid_generator_pb2
 from google.protobuf.message import DecodeError
-import logging
-import warnings
-from urllib3.exceptions import InsecureRequestWarning
-
-warnings.simplefilter('ignore', InsecureRequestWarning)
-
 
 app = Flask(__name__)
-app.logger.setLevel(logging.CRITICAL) 
-
 
 def load_tokens(server_name):
     try:
@@ -35,7 +27,7 @@ def load_tokens(server_name):
                 tokens = json.load(f)
         return tokens
     except Exception as e:
-        app.logger.error(f"Token load failed: {server_name}. Error: {e}") 
+        app.logger.error(f"Error loading tokens for server {server_name}: {e}")
         return None
 
 def encrypt_message(plaintext):
@@ -47,7 +39,7 @@ def encrypt_message(plaintext):
         encrypted_message = cipher.encrypt(padded_message)
         return binascii.hexlify(encrypted_message).decode('utf-8')
     except Exception as e:
-        app.logger.error(f"Encryption failed. Error: {e}")
+        app.logger.error(f"Error encrypting message: {e}")
         return None
 
 def create_protobuf_message(user_id, region):
@@ -57,7 +49,7 @@ def create_protobuf_message(user_id, region):
         message.region = region
         return message.SerializeToString()
     except Exception as e:
-        app.logger.error(f"Protobuf creation (like) failed. Error: {e}")
+        app.logger.error(f"Error creating protobuf message: {e}")
         return None
 
 async def send_request(encrypted_uid, token, url):
@@ -72,16 +64,16 @@ async def send_request(encrypted_uid, token, url):
             'Expect': "100-continue",
             'X-Unity-Version': "2018.4.11f1",
             'X-GA': "v1 1",
-            'ReleaseVersion': "OB52"
+            'ReleaseVersion': "OB53"
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=edata, headers=headers) as response:
                 if response.status != 200:
-                    app.logger.error(f"Request failed: Status {response.status}") 
+                    app.logger.error(f"Request failed with status code: {response.status}")
                     return response.status
                 return await response.text()
     except Exception as e:
-        app.logger.error(f"send_request exception: {e}")
+        app.logger.error(f"Exception in send_request: {e}")
         return None
 
 async def send_multiple_requests(uid, server_name, url):
@@ -89,16 +81,16 @@ async def send_multiple_requests(uid, server_name, url):
         region = server_name
         protobuf_message = create_protobuf_message(uid, region)
         if protobuf_message is None:
-            app.logger.error("Like protobuf failed.")
+            app.logger.error("Failed to create protobuf message.")
             return None
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None:
-            app.logger.error("Like encryption failed.")
+            app.logger.error("Encryption failed.")
             return None
         tasks = []
         tokens = load_tokens(server_name)
         if tokens is None:
-            app.logger.error("Token load failed in multi-send.")
+            app.logger.error("Failed to load tokens.")
             return None
         for i in range(100):
             token = tokens[i % len(tokens)]["token"]
@@ -106,7 +98,7 @@ async def send_multiple_requests(uid, server_name, url):
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results
     except Exception as e:
-        app.logger.error(f"send_multiple_requests exception: {e}")
+        app.logger.error(f"Exception in send_multiple_requests: {e}")
         return None
 
 def create_protobuf(uid):
@@ -116,7 +108,7 @@ def create_protobuf(uid):
         message.garena = 1
         return message.SerializeToString()
     except Exception as e:
-        app.logger.error(f"Protobuf creation (uid) failed. Error: {e}")
+        app.logger.error(f"Error creating uid protobuf: {e}")
         return None
 
 def enc(uid):
@@ -146,15 +138,15 @@ def make_request(encrypt, server_name, token):
             'X-GA': "v1 1",
             'ReleaseVersion': "OB52"
         }
-        response = requests.post(url, data=edata, headers=headers, verify=False) 
+        response = requests.post(url, data=edata, headers=headers, verify=False)
         hex_data = response.content.hex()
         binary = bytes.fromhex(hex_data)
         decode = decode_protobuf(binary)
         if decode is None:
-            app.logger.error("Protobuf decode failed in make_request.")
+            app.logger.error("Protobuf decoding returned None.")
         return decode
     except Exception as e:
-        app.logger.error(f"make_request exception: {e}")
+        app.logger.error(f"Error in make_request: {e}")
         return None
 
 def decode_protobuf(binary):
@@ -163,11 +155,30 @@ def decode_protobuf(binary):
         items.ParseFromString(binary)
         return items
     except DecodeError as e:
-        app.logger.error(f"DecodeError: {e}")
+        app.logger.error(f"Error decoding Protobuf data: {e}")
         return None
     except Exception as e:
-        app.logger.error(f"Decode failed: {e}")
+        app.logger.error(f"Unexpected error during protobuf decoding: {e}")
         return None
+
+def fetch_player_info(uid):
+    try:
+        url = f"https://nr-codex-info.vercel.app/get?uid={uid}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            account_info = data.get("AccountInfo", {})
+            return {
+                "Level": account_info.get("AccountLevel", "NA"),
+                "Region": account_info.get("AccountRegion", "NA"),
+                "ReleaseVersion": account_info.get("ReleaseVersion", "NA")
+            }
+        else:
+            app.logger.error(f"Player info API failed with status code: {response.status_code}")
+            return {"Level": "NA", "Region": "NA", "ReleaseVersion": "NA"}
+    except Exception as e:
+        app.logger.error(f"Error fetching player info from API: {e}")
+        return {"Level": "NA", "Region": "NA", "ReleaseVersion": "NA"}
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
@@ -178,7 +189,20 @@ def handle_requests():
 
     try:
         def process_request():
-            tokens = load_tokens(server_name)
+            # Fetch player info from the new API
+            player_info = fetch_player_info(uid)
+            region = player_info["Region"]
+            level = player_info["Level"]
+            release_version = player_info["ReleaseVersion"]
+
+            # Validate server_name against region from API
+            if region != "NA" and server_name != region:
+                app.logger.warning(f"Server name {server_name} does not match API region {region}. Using API region.")
+                server_name_used = region
+            else:
+                server_name_used = server_name
+
+            tokens = load_tokens(server_name_used)
             if tokens is None:
                 raise Exception("Failed to load tokens.")
             token = tokens[0]['token']
@@ -186,38 +210,37 @@ def handle_requests():
             if encrypted_uid is None:
                 raise Exception("Encryption of UID failed.")
 
-            before = make_request(encrypted_uid, server_name, token)
+            before = make_request(encrypted_uid, server_name_used, token)
             if before is None:
                 raise Exception("Failed to retrieve initial player info.")
             try:
                 jsone = MessageToJson(before)
             except Exception as e:
-                raise Exception(f"'before' proto to JSON failed: {e}")
+                raise Exception(f"Error converting 'before' protobuf to JSON: {e}")
             data_before = json.loads(jsone)
             before_like = data_before.get('AccountInfo', {}).get('Likes', 0)
             try:
                 before_like = int(before_like)
             except Exception:
                 before_like = 0
-            
-            app.logger.info(f"Initial likes: {before_like}") 
+            app.logger.info(f"Likes before command: {before_like}")
 
-            if server_name == "IND":
+            if server_name_used == "IND":
                 url = "https://client.ind.freefiremobile.com/LikeProfile"
-            elif server_name in {"BR", "US", "SAC", "NA"}:
+            elif server_name_used in {"BR", "US", "SAC", "NA"}:
                 url = "https://client.us.freefiremobile.com/LikeProfile"
             else:
                 url = "https://clientbp.ggblueshark.com/LikeProfile"
 
-            asyncio.run(send_multiple_requests(uid, server_name, url))
+            asyncio.run(send_multiple_requests(uid, server_name_used, url))
 
-            after = make_request(encrypted_uid, server_name, token)
+            after = make_request(encrypted_uid, server_name_used, token)
             if after is None:
                 raise Exception("Failed to retrieve player info after like requests.")
             try:
                 jsone_after = MessageToJson(after)
             except Exception as e:
-                raise Exception(f"'after' proto to JSON failed: {e}")
+                raise Exception(f"Error converting 'after' protobuf to JSON: {e}")
             data_after = json.loads(jsone_after)
             after_like = int(data_after.get('AccountInfo', {}).get('Likes', 0))
             player_uid = int(data_after.get('AccountInfo', {}).get('UID', 0))
@@ -229,7 +252,10 @@ def handle_requests():
                 "LikesafterCommand": after_like,
                 "LikesbeforeCommand": before_like,
                 "PlayerNickname": player_name,
+                "Region": region,
+                "Level": level,
                 "UID": player_uid,
+                "ReleaseVersion": release_version,
                 "status": status
             }
             return result
@@ -237,8 +263,8 @@ def handle_requests():
         result = process_request()
         return jsonify(result)
     except Exception as e:
-        app.logger.error(f"Main request processing failed: {e}")
+        app.logger.error(f"Error processing request: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=True)
+    app.run(debug=True, use_reloader=False)
