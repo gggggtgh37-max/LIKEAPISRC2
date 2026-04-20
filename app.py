@@ -16,26 +16,18 @@ app = Flask(__name__)
 
 def load_tokens(server_name):
     try:
-        # ફાઇલનું નામ નક્કી કરો
         if server_name == "IND":
-            filename = "token_ind.json"
+            with open("token_ind.json", "r") as f:
+                tokens = json.load(f)
         elif server_name in {"BR", "US", "SAC", "NA"}:
-            filename = "token_br.json"
+            with open("token_br.json", "r") as f:
+                tokens = json.load(f)
         else:
-            filename = "token_bd.json"
-            
-        # ફાઇલ ખોલો
-        with open(filename, "r") as f:
-            tokens = json.load(f)
+            with open("token_bd.json", "r") as f:
+                tokens = json.load(f)
         return tokens
-    except FileNotFoundError:
-        app.logger.error(f"ભૂલ: {filename} ફાઇલ સર્વર પર મળી નથી!")
-        return None
-    except json.JSONDecodeError:
-        app.logger.error(f"ભૂલ: {filename} ફાઇલમાં રહેલા ડેટાનું ફોર્મેટ ખોટું છે!")
-        return None
     except Exception as e:
-        app.logger.error(f"Error loading tokens: {e}")
+        app.logger.error(f"Error loading tokens for server {server_name}: {e}")
         return None
 
 def encrypt_message(plaintext):
@@ -144,7 +136,7 @@ def make_request(encrypt, server_name, token):
             'Expect': "100-continue",
             'X-Unity-Version': "2018.4.11f1",
             'X-GA': "v1 1",
-            'ReleaseVersion': "OB52"
+            'ReleaseVersion': "OB53"
         }
         response = requests.post(url, data=edata, headers=headers, verify=False)
         hex_data = response.content.hex()
